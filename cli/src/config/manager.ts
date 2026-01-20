@@ -5,6 +5,7 @@ import * as os from "node:os";
 export interface AgentraceConfig {
   server_url: string;
   api_key: string;
+  proxy_url?: string;
 }
 
 const CONFIG_DIR = path.join(os.homedir(), ".agentrace");

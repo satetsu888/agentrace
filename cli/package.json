@@ -38,6 +38,7 @@
     "@modelcontextprotocol/sdk": "^1.0.0",
     "commander": "^12.0.0",
     "diff-match-patch-es": "^1.0.0",
+    "undici": "^7.18.2",
     "zod": "^3.25.0"
   },
   "devDependencies": {

@@ -17,6 +17,7 @@ const CALLBACK_TIMEOUT = 5 * 60 * 1000; // 5 minutes
 export interface InitOptions {
   url?: string;
   dev?: boolean;
+  proxy?: string;
 }
 
 export async function initCommand(options: InitOptions = {}): Promise<void> {
@@ -84,8 +85,12 @@ export async function initCommand(options: InitOptions = {}): Promise<void> {
     saveConfig({
       server_url: serverUrlStr,
       api_key: result.apiKey,
+      ...(options.proxy && { proxy_url: options.proxy }),
     });
     console.log(`✓ Config saved to ${getConfigPath()}`);
+    if (options.proxy) {
+      console.log(`  Proxy: ${options.proxy}`);
+    }
 
     // Determine hook command
     let hookCommand: string | undefined;
