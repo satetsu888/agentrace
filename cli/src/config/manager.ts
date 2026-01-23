@@ -93,11 +93,15 @@ export function deleteLocalConfig(projectDir: string): boolean {
 
 /**
  * Load config with fallback: local config > global config
+ * Uses CLAUDE_PROJECT_DIR environment variable if projectDir is not specified
+ * (supports MCP server context where process.cwd() may not be the project directory)
  */
 export function loadConfigWithFallback(projectDir?: string): AgentraceConfig | null {
-  if (projectDir) {
-    const localConfig = loadLocalConfig(projectDir);
-    if (localConfig) return localConfig;
-  }
+  // CLAUDE_PROJECT_DIR を優先（MCP サーバーコンテキスト対応）
+  const effectiveProjectDir = projectDir || process.env.CLAUDE_PROJECT_DIR || process.cwd();
+
+  const localConfig = loadLocalConfig(effectiveProjectDir);
+  if (localConfig) return localConfig;
+
   return loadConfig();
 }

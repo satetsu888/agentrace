@@ -461,7 +461,15 @@ const fs = require('fs');
 const os = require('os');
 const path = require('path');
 
-const sessionFile = path.join(os.homedir(), '.agentrace', 'current-session.json');
+// CLAUDE_PROJECT_DIR を優先（MCP サーバーコンテキスト対応）
+// local config が存在する場合はプロジェクトディレクトリを使用
+const projectDir = process.env.CLAUDE_PROJECT_DIR || process.cwd();
+const localSessionFile = path.join(projectDir, '.agentrace', 'current-session.json');
+const globalSessionFile = path.join(os.homedir(), '.agentrace', 'current-session.json');
+
+// local config が存在するかチェックしてセッションファイルの場所を決定
+const localConfigExists = fs.existsSync(path.join(projectDir, '.agentrace', 'config.json'));
+const sessionFile = localConfigExists ? localSessionFile : globalSessionFile;
 
 let input = '';
 process.stdin.setEncoding('utf8');
