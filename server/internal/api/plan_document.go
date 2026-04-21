@@ -106,11 +106,99 @@ func (h *PlanDocumentHandler) planDocumentToResponse(ctx context.Context, doc *d
 		return nil, err
 	}
 
-	// Fetch user details
-	collaborators := make([]*CollaboratorResponse, 0, len(userIDs))
-	for _, userID := range userIDs {
-		user, err := h.repos.User.FindByID(ctx, userID)
-		if err == nil && user != nil {
+	users, err := h.repos.User.FindByIDs(ctx, userIDs)
+	if err != nil {
+		return nil, err
+	}
+
+	// Fetch project (single lookup for single-plan paths)
+	var projectCache map[string]*domain.Project
+	if doc.ProjectID != "" {
+		projectCache, err = h.repos.Project.FindByIDs(ctx, []string{doc.ProjectID})
+		if err != nil {
+			return nil, err
+		}
+	}
+
+	activeCommentsCount, err := h.repos.PlanCommentThread.CountActiveByPlanDocumentID(ctx, doc.ID)
+	if err != nil {
+		// Count is non-critical; fall back to zero rather than failing the request.
+		activeCommentsCount = 0
+	}
+
+	return h.buildPlanDocumentResponse(doc, isFavorited, userIDs, users, projectCache, activeCommentsCount), nil
+}
+
+// planDocumentsToResponseBatch builds responses for multiple plans while
+// pre-batching user and project lookups to eliminate N+1 queries during list
+// requests.
+func (h *PlanDocumentHandler) planDocumentsToResponseBatch(ctx context.Context, docs []*domain.PlanDocument, favoritedIDs map[string]bool) ([]*PlanDocumentResponse, error) {
+	if len(docs) == 0 {
+		return []*PlanDocumentResponse{}, nil
+	}
+
+	// Collect collaborator user IDs per plan (one query per plan; the expensive
+	// part — resolving each user — is batched below).
+	collaboratorIDsByPlan := make(map[string][]string, len(docs))
+	userIDSet := make(map[string]struct{})
+	projectIDSet := make(map[string]struct{})
+
+	for _, doc := range docs {
+		ids, err := h.repos.PlanDocumentEvent.GetCollaboratorUserIDs(ctx, doc.ID)
+		if err != nil {
+			return nil, err
+		}
+		collaboratorIDsByPlan[doc.ID] = ids
+		for _, id := range ids {
+			userIDSet[id] = struct{}{}
+		}
+		if doc.ProjectID != "" {
+			projectIDSet[doc.ProjectID] = struct{}{}
+		}
+	}
+
+	userIDs := make([]string, 0, len(userIDSet))
+	for id := range userIDSet {
+		userIDs = append(userIDs, id)
+	}
+	users, err := h.repos.User.FindByIDs(ctx, userIDs)
+	if err != nil {
+		return nil, err
+	}
+
+	projectIDs := make([]string, 0, len(projectIDSet))
+	for id := range projectIDSet {
+		projectIDs = append(projectIDs, id)
+	}
+	projects, err := h.repos.Project.FindByIDs(ctx, projectIDs)
+	if err != nil {
+		return nil, err
+	}
+
+	responses := make([]*PlanDocumentResponse, 0, len(docs))
+	for _, doc := range docs {
+		count, err := h.repos.PlanCommentThread.CountActiveByPlanDocumentID(ctx, doc.ID)
+		if err != nil {
+			count = 0
+		}
+		responses = append(responses, h.buildPlanDocumentResponse(
+			doc, favoritedIDs[doc.ID], collaboratorIDsByPlan[doc.ID], users, projects, count,
+		))
+	}
+	return responses, nil
+}
+
+func (h *PlanDocumentHandler) buildPlanDocumentResponse(
+	doc *domain.PlanDocument,
+	isFavorited bool,
+	collaboratorIDs []string,
+	users map[string]*domain.User,
+	projects map[string]*domain.Project,
+	activeCommentsCount int,
+) *PlanDocumentResponse {
+	collaborators := make([]*CollaboratorResponse, 0, len(collaboratorIDs))
+	for _, userID := range collaboratorIDs {
+		if user, ok := users[userID]; ok && user != nil {
 			collaborators = append(collaborators, &CollaboratorResponse{
 				ID:          user.ID,
 				DisplayName: user.GetDisplayName(),
@@ -118,11 +206,9 @@ func (h *PlanDocumentHandler) planDocumentToResponse(ctx context.Context, doc *d
 		}
 	}
 
-	// Get project info
 	var projectResp *PlanDocumentProjectResponse
 	if doc.ProjectID != "" {
-		project, err := h.repos.Project.FindByID(ctx, doc.ProjectID)
-		if err == nil && project != nil {
+		if project, ok := projects[doc.ProjectID]; ok && project != nil {
 			projectResp = &PlanDocumentProjectResponse{
 				ID:                     project.ID,
 				CanonicalGitRepository: project.CanonicalGitRepository,
@@ -130,18 +216,9 @@ func (h *PlanDocumentHandler) planDocumentToResponse(ctx context.Context, doc *d
 		}
 	}
 
-	// Generate URL if webURL is configured
 	var url string
 	if h.webURL != "" {
 		url = h.webURL + "/plans/" + doc.ID
-	}
-
-	// Count active comment threads
-	activeCommentsCount := 0
-	activeStatus := domain.PlanCommentThreadStatusActive
-	threads, err := h.repos.PlanCommentThread.FindByPlanDocumentID(ctx, doc.ID, &activeStatus)
-	if err == nil {
-		activeCommentsCount = len(threads)
 	}
 
 	return &PlanDocumentResponse{
@@ -156,7 +233,7 @@ func (h *PlanDocumentHandler) planDocumentToResponse(ctx context.Context, doc *d
 		UpdatedAt:           doc.UpdatedAt.Format("2006-01-02T15:04:05Z07:00"),
 		IsFavorited:         isFavorited,
 		ActiveCommentsCount: activeCommentsCount,
-	}, nil
+	}
 }
 
 func (h *PlanDocumentHandler) eventToResponse(ctx context.Context, event *domain.PlanDocumentEvent) *PlanDocumentEventResponse {
@@ -308,15 +385,10 @@ func (h *PlanDocumentHandler) List(w http.ResponseWriter, r *http.Request) {
 		}
 	}
 
-	plans := make([]*PlanDocumentResponse, 0, len(docs))
-	for _, doc := range docs {
-		isFavorited := favoritedIDs[doc.ID]
-		resp, err := h.planDocumentToResponse(ctx, doc, isFavorited)
-		if err != nil {
-			http.Error(w, `{"error": "failed to build response"}`, http.StatusInternalServerError)
-			return
-		}
-		plans = append(plans, resp)
+	plans, err := h.planDocumentsToResponseBatch(ctx, docs, favoritedIDs)
+	if err != nil {
+		http.Error(w, `{"error": "failed to build response"}`, http.StatusInternalServerError)
+		return
 	}
 
 	// Sort: favorited plans first, then by updated_at desc (already sorted by repo)

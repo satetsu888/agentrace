@@ -215,6 +215,48 @@ func (s *PlanCommentThreadRepositorySuite) TestFindByPlanDocumentID_WithStatusFi
 	s.Len(outdatedThreads, 1)
 }
 
+func (s *PlanCommentThreadRepositorySuite) TestCountActiveByPlanDocumentID() {
+	ctx := context.Background()
+
+	planDocID := s.createTestPlanDocument("thread-count-active")
+	if planDocID == "" {
+		s.T().Skip("PlanDocRepo not available, skipping test")
+	}
+
+	statuses := []domain.PlanCommentThreadStatus{
+		domain.PlanCommentThreadStatusActive,
+		domain.PlanCommentThreadStatusActive,
+		domain.PlanCommentThreadStatusActive,
+		domain.PlanCommentThreadStatusResolved,
+		domain.PlanCommentThreadStatusOutdated,
+	}
+	for i, status := range statuses {
+		thread := &domain.PlanCommentThread{
+			PlanDocumentID: planDocID,
+			TargetText:     "count target " + string(rune('a'+i)),
+			Status:         status,
+		}
+		s.Require().NoError(s.Repo.Create(ctx, thread))
+	}
+
+	count, err := s.Repo.CountActiveByPlanDocumentID(ctx, planDocID)
+	s.Require().NoError(err)
+	s.Equal(3, count)
+}
+
+func (s *PlanCommentThreadRepositorySuite) TestCountActiveByPlanDocumentID_Empty() {
+	ctx := context.Background()
+
+	planDocID := s.createTestPlanDocument("thread-count-empty")
+	if planDocID == "" {
+		s.T().Skip("PlanDocRepo not available, skipping test")
+	}
+
+	count, err := s.Repo.CountActiveByPlanDocumentID(ctx, planDocID)
+	s.Require().NoError(err)
+	s.Equal(0, count)
+}
+
 func (s *PlanCommentThreadRepositorySuite) TestUpdate() {
 	ctx := context.Background()
 

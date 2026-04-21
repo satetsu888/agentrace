@@ -3,7 +3,6 @@ package api
 import (
 	"context"
 	"encoding/json"
-	"errors"
 	"net/http"
 	"strings"
 	"time"
@@ -104,24 +103,13 @@ func (h *IngestHandler) Handle(w http.ResponseWriter, r *http.Request) {
 		session.GitBranch = req.GitBranch
 	}
 
-	// Create events from transcript lines
-	eventsCreated := 0
+	// Build events from transcript lines. Title auto-generation happens first
+	// so the UPDATE runs once before the batch insert.
+	events := make([]*domain.Event, 0, len(req.TranscriptLines))
 	for _, line := range req.TranscriptLines {
-		event := &domain.Event{
-			SessionID: session.ID,
-			Payload:   line,
-		}
-
-		// Extract uuid from transcript line (Claude Code's unique identifier)
-		if uuid, ok := line["uuid"].(string); ok {
-			event.UUID = uuid
-		}
-
-		// Extract type if present
 		eventType := ""
 		if et, ok := line["type"].(string); ok {
 			eventType = et
-			event.EventType = et
 		}
 
 		// Skip events that should not be stored (high-volume, not needed for display)
@@ -129,8 +117,8 @@ func (h *IngestHandler) Handle(w http.ResponseWriter, r *http.Request) {
 			continue
 		}
 
-		// Auto-generate title from first user message if not set
-		// Skip meta messages, command messages, and tool results
+		// Auto-generate title from first user message if not set.
+		// Skip meta messages, command messages, and tool results.
 		if eventType == "user" && session.Title == nil && !isMetaMessage(line) {
 			if text := extractUserMessageText(line); text != "" && isValidUserInput(text) {
 				title := truncateString(text, 45)
@@ -140,15 +128,23 @@ func (h *IngestHandler) Handle(w http.ResponseWriter, r *http.Request) {
 			}
 		}
 
-		if err := h.repos.Event.Create(ctx, event); err != nil {
-			// Skip duplicate events (same uuid within session)
-			if errors.Is(err, repository.ErrDuplicateEvent) {
-				continue
-			}
-			http.Error(w, `{"error": "failed to create event"}`, http.StatusInternalServerError)
-			return
+		event := &domain.Event{
+			SessionID: session.ID,
+			EventType: eventType,
+			Payload:   line,
 		}
-		eventsCreated++
+		if uuid, ok := line["uuid"].(string); ok {
+			event.UUID = uuid
+		}
+		events = append(events, event)
+	}
+
+	// Persist all events in a single batch. Duplicate UUIDs are silently skipped
+	// by the repository so retried hook invocations don't fail.
+	eventsCreated, err := h.repos.Event.CreateBatch(ctx, events)
+	if err != nil {
+		http.Error(w, `{"error": "failed to create event"}`, http.StatusInternalServerError)
+		return
 	}
 
 	// Update session's updated_at timestamp if events were created

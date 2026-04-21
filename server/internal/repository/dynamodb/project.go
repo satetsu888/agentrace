@@ -78,6 +78,71 @@ func (r *ProjectRepository) FindByID(ctx context.Context, id string) (*domain.Pr
 	return r.itemToProject(&item), nil
 }
 
+func (r *ProjectRepository) FindByIDs(ctx context.Context, ids []string) (map[string]*domain.Project, error) {
+	result := make(map[string]*domain.Project, len(ids))
+	if len(ids) == 0 {
+		return result, nil
+	}
+
+	// Deduplicate to avoid duplicate keys in BatchGetItem (which would return an error).
+	seen := make(map[string]struct{}, len(ids))
+	unique := make([]string, 0, len(ids))
+	for _, id := range ids {
+		if _, ok := seen[id]; ok {
+			continue
+		}
+		seen[id] = struct{}{}
+		unique = append(unique, id)
+	}
+
+	tableName := r.db.TableName("projects")
+
+	// BatchGetItem is limited to 100 items per call.
+	const batchLimit = 100
+	for start := 0; start < len(unique); start += batchLimit {
+		end := start + batchLimit
+		if end > len(unique) {
+			end = len(unique)
+		}
+		keys := make([]map[string]types.AttributeValue, 0, end-start)
+		for _, id := range unique[start:end] {
+			keys = append(keys, map[string]types.AttributeValue{
+				"id": &types.AttributeValueMemberS{Value: id},
+			})
+		}
+
+		req := map[string]types.KeysAndAttributes{
+			tableName: {Keys: keys},
+		}
+
+		for len(req) > 0 {
+			output, err := r.db.Client.BatchGetItem(ctx, &dynamodb.BatchGetItemInput{
+				RequestItems: req,
+			})
+			if err != nil {
+				return nil, err
+			}
+
+			for _, raw := range output.Responses[tableName] {
+				var item projectItem
+				if err := attributevalue.UnmarshalMap(raw, &item); err != nil {
+					return nil, err
+				}
+				p := r.itemToProject(&item)
+				result[p.ID] = p
+			}
+
+			// DynamoDB may not process all items; retry the unprocessed ones.
+			if unprocessed, ok := output.UnprocessedKeys[tableName]; ok && len(unprocessed.Keys) > 0 {
+				req = map[string]types.KeysAndAttributes{tableName: unprocessed}
+			} else {
+				req = nil
+			}
+		}
+	}
+	return result, nil
+}
+
 func (r *ProjectRepository) FindByCanonicalGitRepository(ctx context.Context, canonicalGitRepo string) (*domain.Project, error) {
 	keyCond := expression.Key("canonical_git_repository").Equal(expression.Value(canonicalGitRepo))
 	expr, err := expression.NewBuilder().WithKeyCondition(keyCond).Build()

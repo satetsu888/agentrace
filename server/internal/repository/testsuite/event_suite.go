@@ -465,6 +465,67 @@ func (s *EventRepositorySuite) TestCreate_DuplicateUUID_Concurrent() {
 	s.Empty(otherErrors, "no unexpected errors should occur")
 }
 
+func (s *EventRepositorySuite) TestCreateBatch() {
+	ctx := context.Background()
+
+	sessionID := s.createTestSession("event-batch")
+	if sessionID == "" {
+		s.T().Skip("SessionRepo not available, skipping test")
+	}
+
+	events := []*domain.Event{
+		{SessionID: sessionID, UUID: uuid.New().String(), EventType: "user", Payload: map[string]interface{}{"n": 1}},
+		{SessionID: sessionID, UUID: uuid.New().String(), EventType: "assistant", Payload: map[string]interface{}{"n": 2}},
+		{SessionID: sessionID, UUID: uuid.New().String(), EventType: "user", Payload: map[string]interface{}{"n": 3}},
+	}
+
+	inserted, err := s.Repo.CreateBatch(ctx, events)
+	s.Require().NoError(err)
+	s.Equal(3, inserted)
+
+	count, err := s.Repo.CountBySessionID(ctx, sessionID)
+	s.Require().NoError(err)
+	s.Equal(3, count)
+}
+
+func (s *EventRepositorySuite) TestCreateBatch_SkipsDuplicates() {
+	ctx := context.Background()
+
+	sessionID := s.createTestSession("event-batch-dup")
+	if sessionID == "" {
+		s.T().Skip("SessionRepo not available, skipping test")
+	}
+
+	existing := &domain.Event{
+		SessionID: sessionID,
+		UUID:      uuid.New().String(),
+		EventType: "user",
+		Payload:   map[string]interface{}{"first": true},
+	}
+	s.Require().NoError(s.Repo.Create(ctx, existing))
+
+	events := []*domain.Event{
+		{SessionID: sessionID, UUID: existing.UUID, EventType: "user", Payload: map[string]interface{}{"dup": true}},
+		{SessionID: sessionID, UUID: uuid.New().String(), EventType: "assistant", Payload: map[string]interface{}{"n": 2}},
+	}
+
+	inserted, err := s.Repo.CreateBatch(ctx, events)
+	s.Require().NoError(err)
+	s.Equal(1, inserted, "only the non-duplicate event should be inserted")
+
+	count, err := s.Repo.CountBySessionID(ctx, sessionID)
+	s.Require().NoError(err)
+	s.Equal(2, count)
+}
+
+func (s *EventRepositorySuite) TestCreateBatch_Empty() {
+	ctx := context.Background()
+
+	inserted, err := s.Repo.CreateBatch(ctx, nil)
+	s.Require().NoError(err)
+	s.Equal(0, inserted)
+}
+
 // isSQLiteBusyError checks if the error is a SQLite SQLITE_BUSY error
 func isSQLiteBusyError(err error) bool {
 	if err == nil {

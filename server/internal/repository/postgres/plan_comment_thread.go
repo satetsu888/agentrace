@@ -85,6 +85,18 @@ func (r *PlanCommentThreadRepository) FindByPlanDocumentID(ctx context.Context, 
 	return threads, nil
 }
 
+func (r *PlanCommentThreadRepository) CountActiveByPlanDocumentID(ctx context.Context, planDocumentID string) (int, error) {
+	var count int
+	err := r.db.QueryRowContext(ctx,
+		`SELECT COUNT(*) FROM plan_comment_threads WHERE plan_document_id = $1 AND status = $2`,
+		planDocumentID, string(domain.PlanCommentThreadStatusActive),
+	).Scan(&count)
+	if err != nil {
+		return 0, err
+	}
+	return count, nil
+}
+
 func (r *PlanCommentThreadRepository) Update(ctx context.Context, thread *domain.PlanCommentThread) error {
 	thread.UpdatedAt = time.Now()
 

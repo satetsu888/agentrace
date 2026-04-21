@@ -77,6 +77,19 @@ func (r *PlanCommentThreadRepository) FindByPlanDocumentID(ctx context.Context, 
 	return threads, nil
 }
 
+func (r *PlanCommentThreadRepository) CountActiveByPlanDocumentID(ctx context.Context, planDocumentID string) (int, error) {
+	r.mu.RLock()
+	defer r.mu.RUnlock()
+
+	count := 0
+	for _, t := range r.threads {
+		if t.PlanDocumentID == planDocumentID && t.Status == domain.PlanCommentThreadStatusActive {
+			count++
+		}
+	}
+	return count, nil
+}
+
 func (r *PlanCommentThreadRepository) Update(ctx context.Context, thread *domain.PlanCommentThread) error {
 	r.mu.Lock()
 	defer r.mu.Unlock()

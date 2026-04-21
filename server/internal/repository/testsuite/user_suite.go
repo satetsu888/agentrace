@@ -100,6 +100,34 @@ func (s *UserRepositorySuite) TestFindByEmail() {
 	s.Equal(user.ID, found.ID)
 }
 
+func (s *UserRepositorySuite) TestFindByIDs() {
+	ctx := context.Background()
+
+	u1 := &domain.User{Email: "batch1@example.com", DisplayName: "One"}
+	u2 := &domain.User{Email: "batch2@example.com", DisplayName: "Two"}
+	u3 := &domain.User{Email: "batch3@example.com", DisplayName: "Three"}
+	s.Require().NoError(s.Repo.Create(ctx, u1))
+	s.Require().NoError(s.Repo.Create(ctx, u2))
+	s.Require().NoError(s.Repo.Create(ctx, u3))
+
+	// Pass a duplicate id to ensure the implementation handles it.
+	result, err := s.Repo.FindByIDs(ctx, []string{u1.ID, u3.ID, u1.ID})
+	s.Require().NoError(err)
+	s.Len(result, 2)
+	s.Equal(u1.Email, result[u1.ID].Email)
+	s.Equal(u3.Email, result[u3.ID].Email)
+	_, hasU2 := result[u2.ID]
+	s.False(hasU2)
+}
+
+func (s *UserRepositorySuite) TestFindByIDs_Empty() {
+	ctx := context.Background()
+
+	result, err := s.Repo.FindByIDs(ctx, nil)
+	s.Require().NoError(err)
+	s.Empty(result)
+}
+
 func (s *UserRepositorySuite) TestFindByEmail_NotFound() {
 	ctx := context.Background()
 

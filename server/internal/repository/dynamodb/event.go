@@ -91,6 +91,26 @@ func (r *EventRepository) Create(ctx context.Context, event *domain.Event) error
 	return nil
 }
 
+// CreateBatch for DynamoDB falls back to serial Create calls because BatchWriteItem
+// does not support conditional expressions, which we need to skip duplicate UUIDs.
+// The API still exposes the batched interface so SQL backends can benefit from
+// transaction-level batching.
+func (r *EventRepository) CreateBatch(ctx context.Context, events []*domain.Event) (int, error) {
+	inserted := 0
+	for _, event := range events {
+		err := r.Create(ctx, event)
+		if err == nil {
+			inserted++
+			continue
+		}
+		if err == repository.ErrDuplicateEvent {
+			continue
+		}
+		return inserted, err
+	}
+	return inserted, nil
+}
+
 func (r *EventRepository) FindBySessionID(ctx context.Context, sessionID string) ([]*domain.Event, error) {
 	keyCond := expression.Key("session_id").Equal(expression.Value(sessionID))
 

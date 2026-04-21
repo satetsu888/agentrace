@@ -29,6 +29,10 @@ func (r *EventRepository) Create(ctx context.Context, event *domain.Event) error
 	r.mu.Lock()
 	defer r.mu.Unlock()
 
+	return r.createLocked(event)
+}
+
+func (r *EventRepository) createLocked(event *domain.Event) error {
 	if event.ID == "" {
 		event.ID = uuid.New().String()
 	}
@@ -47,6 +51,29 @@ func (r *EventRepository) Create(ctx context.Context, event *domain.Event) error
 
 	r.events[event.ID] = event
 	return nil
+}
+
+func (r *EventRepository) CreateBatch(ctx context.Context, events []*domain.Event) (int, error) {
+	if len(events) == 0 {
+		return 0, nil
+	}
+
+	r.mu.Lock()
+	defer r.mu.Unlock()
+
+	inserted := 0
+	for _, event := range events {
+		err := r.createLocked(event)
+		if err == nil {
+			inserted++
+			continue
+		}
+		if err == repository.ErrDuplicateEvent {
+			continue
+		}
+		return inserted, err
+	}
+	return inserted, nil
 }
 
 // getTimestampFromPayload extracts timestamp from payload, falls back to CreatedAt
