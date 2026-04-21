@@ -58,6 +58,23 @@ func (r *ProjectRepository) FindByID(ctx context.Context, id string) (*domain.Pr
 	return project, nil
 }
 
+func (r *ProjectRepository) FindByIDs(ctx context.Context, ids []string) (map[string]*domain.Project, error) {
+	result := make(map[string]*domain.Project, len(ids))
+	if len(ids) == 0 {
+		return result, nil
+	}
+
+	r.mu.RLock()
+	defer r.mu.RUnlock()
+
+	for _, id := range ids {
+		if p, ok := r.projects[id]; ok {
+			result[id] = p
+		}
+	}
+	return result, nil
+}
+
 func (r *ProjectRepository) FindByCanonicalGitRepository(ctx context.Context, canonicalGitRepo string) (*domain.Project, error) {
 	r.mu.RLock()
 	defer r.mu.RUnlock()

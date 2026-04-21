@@ -15,6 +15,7 @@ var ErrDuplicateEvent = errors.New("duplicate event: UUID already exists for thi
 type ProjectRepository interface {
 	Create(ctx context.Context, project *domain.Project) error
 	FindByID(ctx context.Context, id string) (*domain.Project, error)
+	FindByIDs(ctx context.Context, ids []string) (map[string]*domain.Project, error)
 	FindByCanonicalGitRepository(ctx context.Context, canonicalGitRepo string) (*domain.Project, error)
 	FindOrCreateByCanonicalGitRepository(ctx context.Context, canonicalGitRepo string) (*domain.Project, error)
 	FindAll(ctx context.Context, limit int, cursor string) ([]*domain.Project, string, error) // Returns (projects, nextCursor, error)
@@ -43,6 +44,11 @@ type SessionRepository interface {
 // EventRepository はイベントの永続化を担当する
 type EventRepository interface {
 	Create(ctx context.Context, event *domain.Event) error
+	// CreateBatch inserts multiple events efficiently. Duplicate events (same UUID
+	// within a session) are silently skipped. Returns the number of newly inserted
+	// events. Implementations should use a single transaction or batch operation
+	// to avoid serial round-trips.
+	CreateBatch(ctx context.Context, events []*domain.Event) (int, error)
 	FindBySessionID(ctx context.Context, sessionID string) ([]*domain.Event, error)
 	CountBySessionID(ctx context.Context, sessionID string) (int, error)
 	DeleteBySessionID(ctx context.Context, sessionID string) error
@@ -52,6 +58,7 @@ type EventRepository interface {
 type UserRepository interface {
 	Create(ctx context.Context, user *domain.User) error
 	FindByID(ctx context.Context, id string) (*domain.User, error)
+	FindByIDs(ctx context.Context, ids []string) (map[string]*domain.User, error)
 	FindByEmail(ctx context.Context, email string) (*domain.User, error)
 	FindAll(ctx context.Context) ([]*domain.User, error)
 	UpdateDisplayName(ctx context.Context, id string, displayName string) error
@@ -126,6 +133,9 @@ type PlanCommentThreadRepository interface {
 	Create(ctx context.Context, thread *domain.PlanCommentThread) error
 	FindByID(ctx context.Context, id string) (*domain.PlanCommentThread, error)
 	FindByPlanDocumentID(ctx context.Context, planDocumentID string, status *domain.PlanCommentThreadStatus) ([]*domain.PlanCommentThread, error)
+	// CountActiveByPlanDocumentID returns the number of active threads for a plan
+	// document without loading thread data.
+	CountActiveByPlanDocumentID(ctx context.Context, planDocumentID string) (int, error)
 	Update(ctx context.Context, thread *domain.PlanCommentThread) error
 	Delete(ctx context.Context, id string) error
 	// MarkOutdatedByPlanDocumentID marks all active threads as outdated for the given plan document

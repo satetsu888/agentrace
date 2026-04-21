@@ -5,6 +5,7 @@ import (
 	"database/sql"
 	"encoding/json"
 	"fmt"
+	"strconv"
 	"strings"
 	"time"
 
@@ -54,6 +55,66 @@ func (r *EventRepository) Create(ctx context.Context, event *domain.Event) error
 		return err
 	}
 	return nil
+}
+
+func (r *EventRepository) CreateBatch(ctx context.Context, events []*domain.Event) (int, error) {
+	if len(events) == 0 {
+		return 0, nil
+	}
+
+	// Build multi-row INSERT with ON CONFLICT DO NOTHING so duplicate uuids are
+	// silently skipped. Use RETURNING id to count successful inserts.
+	valueGroups := make([]string, 0, len(events))
+	args := make([]any, 0, len(events)*6)
+	argIdx := 1
+
+	for _, event := range events {
+		if event.ID == "" {
+			event.ID = uuid.New().String()
+		}
+		if event.CreatedAt.IsZero() {
+			event.CreatedAt = time.Now()
+		}
+
+		payloadJSON, err := json.Marshal(event.Payload)
+		if err != nil {
+			return 0, err
+		}
+
+		var uuidValue sql.NullString
+		if event.UUID != "" {
+			uuidValue = sql.NullString{String: event.UUID, Valid: true}
+		}
+
+		placeholders := make([]string, 6)
+		for i := 0; i < 6; i++ {
+			placeholders[i] = "$" + strconv.Itoa(argIdx)
+			argIdx++
+		}
+		valueGroups = append(valueGroups, "("+strings.Join(placeholders, ",")+")")
+		args = append(args, event.ID, event.SessionID, uuidValue, event.EventType, payloadJSON, event.CreatedAt)
+	}
+
+	query := `INSERT INTO events (id, session_id, uuid, event_type, payload, created_at)
+		 VALUES ` + strings.Join(valueGroups, ",") + `
+		 ON CONFLICT (session_id, uuid) DO NOTHING
+		 RETURNING id`
+
+	rows, err := r.db.QueryContext(ctx, query, args...)
+	if err != nil {
+		return 0, err
+	}
+	defer rows.Close()
+
+	inserted := 0
+	for rows.Next() {
+		var id string
+		if err := rows.Scan(&id); err != nil {
+			return inserted, err
+		}
+		inserted++
+	}
+	return inserted, rows.Err()
 }
 
 func (r *EventRepository) FindBySessionID(ctx context.Context, sessionID string) ([]*domain.Event, error) {

@@ -46,6 +46,23 @@ func (r *UserRepository) FindByID(ctx context.Context, id string) (*domain.User,
 	return user, nil
 }
 
+func (r *UserRepository) FindByIDs(ctx context.Context, ids []string) (map[string]*domain.User, error) {
+	result := make(map[string]*domain.User, len(ids))
+	if len(ids) == 0 {
+		return result, nil
+	}
+
+	r.mu.RLock()
+	defer r.mu.RUnlock()
+
+	for _, id := range ids {
+		if user, ok := r.users[id]; ok {
+			result[id] = user
+		}
+	}
+	return result, nil
+}
+
 func (r *UserRepository) FindByEmail(ctx context.Context, email string) (*domain.User, error) {
 	r.mu.RLock()
 	defer r.mu.RUnlock()

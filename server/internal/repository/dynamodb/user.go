@@ -77,6 +77,68 @@ func (r *UserRepository) FindByID(ctx context.Context, id string) (*domain.User,
 	return r.itemToUser(&item), nil
 }
 
+func (r *UserRepository) FindByIDs(ctx context.Context, ids []string) (map[string]*domain.User, error) {
+	result := make(map[string]*domain.User, len(ids))
+	if len(ids) == 0 {
+		return result, nil
+	}
+
+	seen := make(map[string]struct{}, len(ids))
+	unique := make([]string, 0, len(ids))
+	for _, id := range ids {
+		if _, ok := seen[id]; ok {
+			continue
+		}
+		seen[id] = struct{}{}
+		unique = append(unique, id)
+	}
+
+	tableName := r.db.TableName("users")
+
+	const batchLimit = 100
+	for start := 0; start < len(unique); start += batchLimit {
+		end := start + batchLimit
+		if end > len(unique) {
+			end = len(unique)
+		}
+		keys := make([]map[string]types.AttributeValue, 0, end-start)
+		for _, id := range unique[start:end] {
+			keys = append(keys, map[string]types.AttributeValue{
+				"id": &types.AttributeValueMemberS{Value: id},
+			})
+		}
+
+		req := map[string]types.KeysAndAttributes{
+			tableName: {Keys: keys},
+		}
+
+		for len(req) > 0 {
+			output, err := r.db.Client.BatchGetItem(ctx, &dynamodb.BatchGetItemInput{
+				RequestItems: req,
+			})
+			if err != nil {
+				return nil, err
+			}
+
+			for _, raw := range output.Responses[tableName] {
+				var item userItem
+				if err := attributevalue.UnmarshalMap(raw, &item); err != nil {
+					return nil, err
+				}
+				u := r.itemToUser(&item)
+				result[u.ID] = u
+			}
+
+			if unprocessed, ok := output.UnprocessedKeys[tableName]; ok && len(unprocessed.Keys) > 0 {
+				req = map[string]types.KeysAndAttributes{tableName: unprocessed}
+			} else {
+				req = nil
+			}
+		}
+	}
+	return result, nil
+}
+
 func (r *UserRepository) FindByEmail(ctx context.Context, email string) (*domain.User, error) {
 	keyCond := expression.Key("email").Equal(expression.Value(email))
 	expr, err := expression.NewBuilder().WithKeyCondition(keyCond).Build()

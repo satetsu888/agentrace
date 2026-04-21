@@ -3,6 +3,7 @@ package sqlite
 import (
 	"context"
 	"database/sql"
+	"strings"
 	"time"
 
 	"github.com/google/uuid"
@@ -52,6 +53,41 @@ func (r *UserRepository) FindByID(ctx context.Context, id string) (*domain.User,
 	user.DisplayName = displayName.String
 	user.CreatedAt, _ = time.Parse(time.RFC3339Nano, createdAt)
 	return &user, nil
+}
+
+func (r *UserRepository) FindByIDs(ctx context.Context, ids []string) (map[string]*domain.User, error) {
+	result := make(map[string]*domain.User, len(ids))
+	if len(ids) == 0 {
+		return result, nil
+	}
+
+	placeholders := make([]string, len(ids))
+	args := make([]any, len(ids))
+	for i, id := range ids {
+		placeholders[i] = "?"
+		args[i] = id
+	}
+
+	query := `SELECT id, email, display_name, created_at FROM users WHERE id IN (` +
+		strings.Join(placeholders, ",") + `)`
+	rows, err := r.db.QueryContext(ctx, query, args...)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+
+	for rows.Next() {
+		var user domain.User
+		var createdAt string
+		var displayName sql.NullString
+		if err := rows.Scan(&user.ID, &user.Email, &displayName, &createdAt); err != nil {
+			return nil, err
+		}
+		user.DisplayName = displayName.String
+		user.CreatedAt, _ = time.Parse(time.RFC3339Nano, createdAt)
+		result[user.ID] = &user
+	}
+	return result, rows.Err()
 }
 
 func (r *UserRepository) FindByEmail(ctx context.Context, email string) (*domain.User, error) {

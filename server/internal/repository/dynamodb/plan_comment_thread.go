@@ -138,6 +138,29 @@ func (r *PlanCommentThreadRepository) FindByPlanDocumentID(ctx context.Context, 
 	return threads, nil
 }
 
+func (r *PlanCommentThreadRepository) CountActiveByPlanDocumentID(ctx context.Context, planDocumentID string) (int, error) {
+	keyCond := expression.Key("plan_document_id").Equal(expression.Value(planDocumentID))
+	filter := expression.Name("status").Equal(expression.Value(string(domain.PlanCommentThreadStatusActive)))
+	expr, err := expression.NewBuilder().WithKeyCondition(keyCond).WithFilter(filter).Build()
+	if err != nil {
+		return 0, err
+	}
+
+	result, err := r.db.Client.Query(ctx, &dynamodb.QueryInput{
+		TableName:                 aws.String(r.db.TableName("plan_comment_threads")),
+		IndexName:                 aws.String("plan_document_id-created_at-index"),
+		KeyConditionExpression:    expr.KeyCondition(),
+		FilterExpression:          expr.Filter(),
+		ExpressionAttributeNames:  expr.Names(),
+		ExpressionAttributeValues: expr.Values(),
+		Select:                    types.SelectCount,
+	})
+	if err != nil {
+		return 0, err
+	}
+	return int(result.Count), nil
+}
+
 func (r *PlanCommentThreadRepository) Update(ctx context.Context, thread *domain.PlanCommentThread) error {
 	thread.UpdatedAt = time.Now()
 

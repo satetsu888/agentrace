@@ -100,6 +100,33 @@ func (s *ProjectRepositorySuite) TestFindByID_NotFound() {
 	s.Nil(found)
 }
 
+func (s *ProjectRepositorySuite) TestFindByIDs() {
+	ctx := context.Background()
+
+	p1 := &domain.Project{CanonicalGitRepository: "https://github.com/example/batch1"}
+	p2 := &domain.Project{CanonicalGitRepository: "https://github.com/example/batch2"}
+	p3 := &domain.Project{CanonicalGitRepository: "https://github.com/example/batch3"}
+	s.Require().NoError(s.Repo.Create(ctx, p1))
+	s.Require().NoError(s.Repo.Create(ctx, p2))
+	s.Require().NoError(s.Repo.Create(ctx, p3))
+
+	result, err := s.Repo.FindByIDs(ctx, []string{p1.ID, p3.ID, p1.ID})
+	s.Require().NoError(err)
+	s.Len(result, 2)
+	s.Equal(p1.CanonicalGitRepository, result[p1.ID].CanonicalGitRepository)
+	s.Equal(p3.CanonicalGitRepository, result[p3.ID].CanonicalGitRepository)
+	_, hasP2 := result[p2.ID]
+	s.False(hasP2)
+}
+
+func (s *ProjectRepositorySuite) TestFindByIDs_Empty() {
+	ctx := context.Background()
+
+	result, err := s.Repo.FindByIDs(ctx, nil)
+	s.Require().NoError(err)
+	s.Empty(result)
+}
+
 func (s *ProjectRepositorySuite) TestFindByCanonicalGitRepository() {
 	ctx := context.Background()
 

@@ -55,6 +55,63 @@ func (r *EventRepository) Create(ctx context.Context, event *domain.Event) error
 	return nil
 }
 
+func (r *EventRepository) CreateBatch(ctx context.Context, events []*domain.Event) (int, error) {
+	if len(events) == 0 {
+		return 0, nil
+	}
+
+	tx, err := r.db.BeginTx(ctx, nil)
+	if err != nil {
+		return 0, err
+	}
+	defer tx.Rollback()
+
+	stmt, err := tx.PrepareContext(ctx,
+		`INSERT INTO events (id, session_id, uuid, event_type, payload, created_at)
+		 VALUES (?, ?, ?, ?, ?, ?)`)
+	if err != nil {
+		return 0, err
+	}
+	defer stmt.Close()
+
+	inserted := 0
+	for _, event := range events {
+		if event.ID == "" {
+			event.ID = uuid.New().String()
+		}
+		if event.CreatedAt.IsZero() {
+			event.CreatedAt = time.Now()
+		}
+
+		payloadJSON, err := json.Marshal(event.Payload)
+		if err != nil {
+			return inserted, err
+		}
+
+		var uuidValue sql.NullString
+		if event.UUID != "" {
+			uuidValue = sql.NullString{String: event.UUID, Valid: true}
+		}
+
+		_, err = stmt.ExecContext(ctx,
+			event.ID, event.SessionID, uuidValue, event.EventType,
+			string(payloadJSON), event.CreatedAt.Format(time.RFC3339Nano),
+		)
+		if err != nil {
+			if strings.Contains(err.Error(), "UNIQUE constraint failed") {
+				continue
+			}
+			return inserted, err
+		}
+		inserted++
+	}
+
+	if err := tx.Commit(); err != nil {
+		return 0, err
+	}
+	return inserted, nil
+}
+
 func (r *EventRepository) FindBySessionID(ctx context.Context, sessionID string) ([]*domain.Event, error) {
 	query := fmt.Sprintf(`SELECT id, session_id, uuid, event_type, payload, created_at
 		 FROM events WHERE session_id = ?

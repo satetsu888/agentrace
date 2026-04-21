@@ -3,6 +3,7 @@ package turso
 import (
 	"context"
 	"database/sql"
+	"strings"
 	"time"
 
 	"github.com/google/uuid"
@@ -40,6 +41,37 @@ func (r *ProjectRepository) FindByID(ctx context.Context, id string) (*domain.Pr
 		 FROM projects WHERE id = ?`,
 		id,
 	))
+}
+
+func (r *ProjectRepository) FindByIDs(ctx context.Context, ids []string) (map[string]*domain.Project, error) {
+	result := make(map[string]*domain.Project, len(ids))
+	if len(ids) == 0 {
+		return result, nil
+	}
+
+	placeholders := make([]string, len(ids))
+	args := make([]any, len(ids))
+	for i, id := range ids {
+		placeholders[i] = "?"
+		args[i] = id
+	}
+
+	query := `SELECT id, canonical_git_repository, created_at FROM projects WHERE id IN (` +
+		strings.Join(placeholders, ",") + `)`
+	rows, err := r.db.QueryContext(ctx, query, args...)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+
+	for rows.Next() {
+		p, err := r.scanProjectFromRows(rows)
+		if err != nil {
+			return nil, err
+		}
+		result[p.ID] = p
+	}
+	return result, rows.Err()
 }
 
 func (r *ProjectRepository) FindByCanonicalGitRepository(ctx context.Context, canonicalGitRepo string) (*domain.Project, error) {
