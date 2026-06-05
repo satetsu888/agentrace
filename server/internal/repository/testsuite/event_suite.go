@@ -228,13 +228,8 @@ func (s *EventRepositorySuite) TestFindBySessionID_ChronologicalOrder() {
 	s.WithinDuration(baseTime.Add(500*time.Millisecond), events[4].CreatedAt, time.Microsecond, "Last event should have latest timestamp")
 }
 
-// TestFindBySessionID_OrdersByPayloadTimestamp verifies that events are ordered by
-// the transcript line's own payload.timestamp, NOT by created_at (server receive time).
-//
-// This guards against backend drift: SQLite/Postgres/turso/memory already sort by
-// payload.timestamp, while DynamoDB used to sort by created_at. Under asynchronous /
-// out-of-order delivery the two disagree, so we deliberately insert events whose
-// created_at order is the REVERSE of their payload.timestamp order.
+// TestFindBySessionID_OrdersByPayloadTimestamp ensures events are returned ordered by
+// payload.timestamp (event time), not created_at — guarding the cross-backend contract.
 func (s *EventRepositorySuite) TestFindBySessionID_OrdersByPayloadTimestamp() {
 	ctx := context.Background()
 
