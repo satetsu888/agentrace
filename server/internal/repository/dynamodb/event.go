@@ -135,12 +135,26 @@ func (r *EventRepository) FindBySessionID(ctx context.Context, sessionID string)
 		events[i] = r.itemToEvent(&item)
 	}
 
-	// Sort by created_at since sort_key is now uuid-based and doesn't preserve chronological order
-	sort.Slice(events, func(i, j int) bool {
-		return events[i].CreatedAt.Before(events[j].CreatedAt)
+	// sort_key is uuid-based, so chronological order must be reconstructed here.
+	// Match the other backends: sort by payload.timestamp, not created_at.
+	sort.SliceStable(events, func(i, j int) bool {
+		return getTimestampFromPayload(events[i]).Before(getTimestampFromPayload(events[j]))
 	})
 
 	return events, nil
+}
+
+func getTimestampFromPayload(e *domain.Event) time.Time {
+	if ts, ok := e.Payload["timestamp"].(string); ok {
+		if parsed, err := time.Parse(time.RFC3339Nano, ts); err == nil {
+			return parsed
+		}
+		// Try parsing without timezone
+		if parsed, err := time.Parse("2006-01-02T15:04:05.000Z", ts); err == nil {
+			return parsed
+		}
+	}
+	return e.CreatedAt
 }
 
 func (r *EventRepository) CountBySessionID(ctx context.Context, sessionID string) (int, error) {

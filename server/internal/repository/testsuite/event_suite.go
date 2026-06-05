@@ -228,6 +228,55 @@ func (s *EventRepositorySuite) TestFindBySessionID_ChronologicalOrder() {
 	s.WithinDuration(baseTime.Add(500*time.Millisecond), events[4].CreatedAt, time.Microsecond, "Last event should have latest timestamp")
 }
 
+// TestFindBySessionID_OrdersByPayloadTimestamp ensures events are returned ordered by
+// payload.timestamp (event time), not created_at — guarding the cross-backend contract.
+func (s *EventRepositorySuite) TestFindBySessionID_OrdersByPayloadTimestamp() {
+	ctx := context.Background()
+
+	sessionID := s.createTestSession("event-payload-ts-order")
+	if sessionID == "" {
+		s.T().Skip("SessionRepo not available, skipping test")
+	}
+
+	// Second precision + UTC "Z" keeps the timestamp string lexically ordered,
+	// which Postgres relies on (ORDER BY payload->>'timestamp'), while Go-based
+	// backends parse it with RFC3339Nano. Fixed width avoids fractional-trim pitfalls.
+	baseTime := time.Now().UTC().Truncate(time.Second)
+
+	const n = 5
+	expectedTimestamps := make([]string, n)
+	for k := 0; k < n; k++ {
+		// payload.timestamp ascends with k; created_at descends with k (reverse order).
+		ts := baseTime.Add(time.Duration(k) * time.Second).Format(time.RFC3339Nano)
+		expectedTimestamps[k] = ts
+		event := &domain.Event{
+			SessionID: sessionID,
+			UUID:      uuid.New().String(),
+			EventType: "message",
+			Payload: map[string]interface{}{
+				"timestamp": ts,
+				"marker":    k,
+			},
+			CreatedAt: baseTime.Add(time.Duration(n-k) * time.Hour),
+		}
+		err := s.Repo.Create(ctx, event)
+		s.Require().NoError(err)
+	}
+
+	events, err := s.Repo.FindBySessionID(ctx, sessionID)
+	s.Require().NoError(err)
+	s.Require().Len(events, n)
+
+	// Returned order must follow payload.timestamp ascending, i.e. the insertion (created_at)
+	// order reversed. If a backend sorted by created_at, this would come back descending and fail.
+	for i := 0; i < n; i++ {
+		ts, ok := events[i].Payload["timestamp"].(string)
+		s.Require().True(ok, "event[%d] should carry a string payload.timestamp", i)
+		s.Equal(expectedTimestamps[i], ts,
+			"events should be ordered by payload.timestamp ascending (position %d)", i)
+	}
+}
+
 func (s *EventRepositorySuite) TestFindBySessionID_Empty() {
 	ctx := context.Background()
 
