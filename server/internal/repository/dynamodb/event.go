@@ -135,12 +135,33 @@ func (r *EventRepository) FindBySessionID(ctx context.Context, sessionID string)
 		events[i] = r.itemToEvent(&item)
 	}
 
-	// Sort by created_at since sort_key is now uuid-based and doesn't preserve chronological order
-	sort.Slice(events, func(i, j int) bool {
-		return events[i].CreatedAt.Before(events[j].CreatedAt)
+	// The sort_key is uuid-based and does not preserve chronological order, so the
+	// ordering has to be reconstructed here. Sort by the transcript line's own
+	// payload.timestamp (falling back to created_at) to match the sqlite/postgres/
+	// turso/memory backends; created_at is the server receive time and diverges from
+	// the event time under out-of-order delivery.
+	sort.SliceStable(events, func(i, j int) bool {
+		return eventTimestamp(events[i]).Before(eventTimestamp(events[j]))
 	})
 
 	return events, nil
+}
+
+// eventTimestamp returns the ordering key for an event: the transcript line's own
+// payload.timestamp when present and parseable, otherwise the server-side CreatedAt.
+// This mirrors getTimestampFromPayload in the sqlite/turso backends so that every
+// backend orders a session's events identically.
+func eventTimestamp(e *domain.Event) time.Time {
+	if ts, ok := e.Payload["timestamp"].(string); ok {
+		if parsed, err := time.Parse(time.RFC3339Nano, ts); err == nil {
+			return parsed
+		}
+		// Fallback for timestamps without timezone offset.
+		if parsed, err := time.Parse("2006-01-02T15:04:05.000Z", ts); err == nil {
+			return parsed
+		}
+	}
+	return e.CreatedAt
 }
 
 func (r *EventRepository) CountBySessionID(ctx context.Context, sessionID string) (int, error) {
