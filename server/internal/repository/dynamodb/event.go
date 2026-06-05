@@ -138,13 +138,13 @@ func (r *EventRepository) FindBySessionID(ctx context.Context, sessionID string)
 	// sort_key is uuid-based, so chronological order must be reconstructed here.
 	// Match the other backends: sort by payload.timestamp, not created_at.
 	sort.SliceStable(events, func(i, j int) bool {
-		return eventTimestamp(events[i]).Before(eventTimestamp(events[j]))
+		return getTimestampFromPayload(events[i]).Before(getTimestampFromPayload(events[j]))
 	})
 
 	return events, nil
 }
 
-func eventTimestamp(e *domain.Event) time.Time {
+func getTimestampFromPayload(e *domain.Event) time.Time {
 	if ts, ok := e.Payload["timestamp"].(string); ok {
 		if parsed, err := time.Parse(time.RFC3339Nano, ts); err == nil {
 			return parsed
