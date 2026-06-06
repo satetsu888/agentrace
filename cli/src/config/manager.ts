@@ -11,11 +11,6 @@ export interface AgentraceConfig {
   send_mode?: SendMode;
 }
 
-/**
- * Resolve the effective send mode from a config.
- * Defaults to "sync" when unset, null, or set to any unrecognized value
- * (opt-in / backward-compatible default — HC-1).
- */
 export function getSendMode(config: AgentraceConfig | null | undefined): SendMode {
   return config?.send_mode === "async" ? "async" : "sync";
 }
