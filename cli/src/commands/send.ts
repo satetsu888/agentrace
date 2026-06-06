@@ -21,6 +21,19 @@ interface SendTranscriptParams {
   isHook: boolean;
 }
 
+export interface RunSendParams {
+  sessionId: string;
+  transcriptPath: string;
+  cwd?: string;
+}
+
+export type SendOutcome =
+  | { status: "no-config" }
+  | { status: "no-lines" }
+  | { status: "no-valid-lines" }
+  | { status: "sent"; lineCount: number }
+  | { status: "error"; error: string };
+
 // Event types that should not be sent to the server (high-volume, not needed for display)
 const SKIPPED_EVENT_TYPES = ["progress", "file-history-snapshot"];
 
@@ -51,34 +64,21 @@ function getGitBranch(cwd: string): string | null {
 }
 
 /**
- * Core logic for sending transcript data to the server.
- * Shared between hook-based and manual invocations.
+ * Send the cursor diff to the server and advance the cursor on success.
+ * Returns an outcome instead of exiting so callers control reporting and,
+ * for the async worker, lock release.
  */
-async function sendTranscript(params: SendTranscriptParams): Promise<void> {
-  const { sessionId, transcriptPath, cwd, isHook } = params;
+export async function runSend(params: RunSendParams): Promise<SendOutcome> {
+  const { sessionId, transcriptPath, cwd } = params;
 
-  const exitWithError = (message: string) => {
-    console.error(message);
-    process.exit(isHook ? 0 : 1);
-  };
-
-  // Check if config exists (local config takes precedence over global)
   const config = loadConfigWithFallback(cwd);
   if (!config) {
-    exitWithError(
-      "[agentrace] Warning: Config not found. Run 'npx agentrace init' first."
-    );
-    return;
+    return { status: "no-config" };
   }
 
-  // Get new lines from transcript
   const { lines, totalLineCount } = getNewLines(transcriptPath, sessionId);
-
   if (lines.length === 0) {
-    if (!isHook) {
-      console.log("[agentrace] No new lines to send.");
-    }
-    process.exit(0);
+    return { status: "no-lines" };
   }
 
   // Parse JSONL lines and filter out skipped event types
@@ -86,7 +86,6 @@ async function sendTranscript(params: SendTranscriptParams): Promise<void> {
   for (const line of lines) {
     try {
       const parsed = JSON.parse(line) as Record<string, unknown>;
-      // Skip high-volume event types that are not needed for display
       if (typeof parsed.type === "string" && SKIPPED_EVENT_TYPES.includes(parsed.type)) {
         continue;
       }
@@ -97,10 +96,7 @@ async function sendTranscript(params: SendTranscriptParams): Promise<void> {
   }
 
   if (transcriptLines.length === 0) {
-    if (!isHook) {
-      console.log("[agentrace] No valid transcript lines to send.");
-    }
-    process.exit(0);
+    return { status: "no-valid-lines" };
   }
 
   // Detect subagent (Task tool) sessions from first transcript line
@@ -135,7 +131,6 @@ async function sendTranscript(params: SendTranscriptParams): Promise<void> {
     gitBranch = getGitBranch(cwd) ?? undefined;
   }
 
-  // Send to server
   const result = await sendIngest(
     {
       session_id: sessionId,
@@ -143,7 +138,6 @@ async function sendTranscript(params: SendTranscriptParams): Promise<void> {
       cwd: cwd,
       git_remote_url: gitRemoteUrl,
       git_branch: gitBranch,
-      // Subagent fields
       parent_session_id: parentSessionId,
       agent_id: agentId,
       is_sidechain: isSidechain || undefined,
@@ -152,20 +146,56 @@ async function sendTranscript(params: SendTranscriptParams): Promise<void> {
     cwd
   );
 
-  if (result.ok) {
-    // Update cursor on success
-    saveCursor(sessionId, totalLineCount);
-    if (!isHook) {
-      console.log(
-        `[agentrace] Sent ${transcriptLines.length} lines for session ${sessionId}`
-      );
-    }
-  } else {
-    exitWithError(`[agentrace] Warning: ${result.error}`);
-    return;
+  if (!result.ok) {
+    return { status: "error", error: result.error ?? "unknown error" };
   }
 
-  process.exit(0);
+  // Update cursor only on success so a failed send is retried by the next fire.
+  saveCursor(sessionId, totalLineCount);
+  return { status: "sent", lineCount: transcriptLines.length };
+}
+
+/**
+ * Send wrapper for the synchronous hook path and manual invocation.
+ * Maps the outcome to logging and the existing exit-code contract
+ * (hook: always exit 0; manual: exit 1 on error).
+ */
+async function sendTranscript(params: SendTranscriptParams): Promise<void> {
+  const { sessionId, transcriptPath, cwd, isHook } = params;
+
+  const outcome = await runSend({ sessionId, transcriptPath, cwd });
+
+  let exitCode = 0;
+  switch (outcome.status) {
+    case "no-config":
+      console.error(
+        "[agentrace] Warning: Config not found. Run 'npx agentrace init' first."
+      );
+      exitCode = isHook ? 0 : 1;
+      break;
+    case "no-lines":
+      if (!isHook) {
+        console.log("[agentrace] No new lines to send.");
+      }
+      break;
+    case "no-valid-lines":
+      if (!isHook) {
+        console.log("[agentrace] No valid transcript lines to send.");
+      }
+      break;
+    case "sent":
+      if (!isHook) {
+        console.log(
+          `[agentrace] Sent ${outcome.lineCount} lines for session ${sessionId}`
+        );
+      }
+      break;
+    case "error":
+      console.error(`[agentrace] Warning: ${outcome.error}`);
+      exitCode = isHook ? 0 : 1;
+      break;
+  }
+  process.exit(exitCode);
 }
 
 /**

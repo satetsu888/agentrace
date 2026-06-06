@@ -141,6 +141,20 @@ describe("send/lock", () => {
     });
   });
 
+  describe("release only removes a lock we own", () => {
+    it("does not remove a holder owned by another process", () => {
+      writeMeta(holderDir(SID), { pid: DEAD_PID, startedAt: Date.now() });
+      releaseSessionLock(SID);
+      expect(fs.existsSync(holderDir(SID))).toBe(true);
+    });
+
+    it("removes a holder we acquired ourselves", () => {
+      expect(acquireHolder(SID)).toBe(true);
+      releaseSessionLock(SID);
+      expect(fs.existsSync(holderDir(SID))).toBe(false);
+    });
+  });
+
   describe("acquireSessionLock (high-level)", () => {
     it("returns 'acquired' when the holder is free", async () => {
       await expect(acquireSessionLock(SID)).resolves.toBe("acquired");

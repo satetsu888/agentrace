@@ -125,12 +125,21 @@ export function acquireWaiting(sid: string): boolean {
   return takeSlot(waitingDir(sid));
 }
 
+// Remove a slot only if we still own it, so a worker whose lock was stale-evicted
+// and re-acquired by another process never deletes that new holder's lock.
+function removeIfOwned(dir: string): void {
+  const meta = readMeta(dir);
+  if (meta && meta.pid === process.pid) {
+    fs.rmSync(dir, { recursive: true, force: true });
+  }
+}
+
 export function releaseSessionLock(sid: string): void {
-  fs.rmSync(holderDir(sid), { recursive: true, force: true });
+  removeIfOwned(holderDir(sid));
 }
 
 export function releaseWaiting(sid: string): void {
-  fs.rmSync(waitingDir(sid), { recursive: true, force: true });
+  removeIfOwned(waitingDir(sid));
 }
 
 export type AcquireOutcome = "acquired" | "dropped";
