@@ -237,19 +237,27 @@ describe("send/lock", () => {
 
       const here = path.dirname(fileURLToPath(import.meta.url));
       const racerPath = path.join(here, "__lock_racer__.ts");
-      // Each racer reports its result, then stays alive holding the lock so a
-      // winner's pid does not die and let the next racer reclaim it as stale.
-      // The unique-holder guarantee then rests purely on atomic mkdir.
+      const sentinel = path.join(tmpHome, "release-racers");
+      // Each racer reports its result, then stays alive until the sentinel file
+      // appears. The test writes the sentinel only after all racers have reported,
+      // so every racer is alive while the others attempt acquisition — a winner's
+      // pid never dies mid-race to let a late starter reclaim it as stale. The
+      // unique-holder guarantee then rests purely on atomic mkdir, independent of
+      // process scheduling.
       fs.writeFileSync(
         racerPath,
         `import { acquireHolder } from "./lock.js";\n` +
+          `import * as fs from "node:fs";\n` +
           `const got = acquireHolder(process.env.SID!);\n` +
           `process.stdout.write(got ? "ACQUIRED" : "NOPE");\n` +
-          `setTimeout(() => process.exit(0), 1500);\n`
+          `const t = setInterval(() => {\n` +
+          `  if (fs.existsSync(process.env.SENTINEL!)) { clearInterval(t); process.exit(0); }\n` +
+          `}, 20);\n`
       );
 
       try {
         const N = 5;
+        let reported = 0;
         const runs = Array.from({ length: N }, () =>
           new Promise<string>((resolve) => {
             // Launch each racer as a separate OS process under tsx so the
@@ -257,10 +265,20 @@ describe("send/lock", () => {
             const child = spawn(
               process.execPath,
               ["--import", "tsx", racerPath],
-              { env: { ...process.env, SID }, stdio: ["ignore", "pipe", "ignore"] }
+              {
+                env: { ...process.env, SID, SENTINEL: sentinel },
+                stdio: ["ignore", "pipe", "ignore"],
+              }
             );
             let out = "";
-            child.stdout.on("data", (c) => (out += c.toString()));
+            let counted = false;
+            child.stdout.on("data", (c) => {
+              out += c.toString();
+              if (!counted) {
+                counted = true;
+                if (++reported === N) fs.writeFileSync(sentinel, "go");
+              }
+            });
             child.on("close", () => resolve(out.trim()));
           })
         );

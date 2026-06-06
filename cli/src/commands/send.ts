@@ -240,10 +240,15 @@ export async function sendCommand(): Promise<void> {
 
   // Async mode: hand off to a detached worker and return immediately, keeping
   // the HTTPS send off the hook's critical path. The 10s UserPromptSubmit wait
-  // is sync-only.
+  // is sync-only. If the worker cannot be spawned, fall back to a sync send so
+  // the hook neither crashes nor drops the batch.
   if (getSendMode(loadConfigWithFallback(projectDir)) === "async") {
-    spawnWorker({ sessionId, transcriptPath, projectDir });
-    process.exit(0);
+    try {
+      spawnWorker({ sessionId, transcriptPath, projectDir });
+      process.exit(0);
+    } catch {
+      // fall through to the synchronous send below
+    }
   }
 
   // For UserPromptSubmit, wait for transcript to be written
@@ -279,6 +284,7 @@ function spawnWorker(payload: {
       },
     }
   );
+  child.on("error", () => {});
   child.unref();
 }
 
