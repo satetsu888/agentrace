@@ -75,6 +75,7 @@ cli/src/
 | `init --url <url>` | 初期設定 + hooks + MCP インストール |
 | `init --url <url> --proxy <proxy-url>` | プロキシ経由で接続 |
 | `init --url <url> --dev` | 開発モード（ローカルCLIパス使用） |
+| `init --url <url> --async` | 非同期送信モードを有効化（`send_mode: async`） |
 | `init --url <url> --local` | プロジェクト単位で hooks/MCP を設定 |
 | `init --url <url> --local --separate-local-config` | プロジェクト単位で config も作成 |
 | `login` | Webログイン URL 発行 |
@@ -82,6 +83,7 @@ cli/src/
 | `send --claude-session-id <id>` | 既存セッションを手動送信（差分のみ） |
 | `mcp-server` | MCPサーバー起動（stdio通信） |
 | `on` / `off` | hooks + MCP 有効化/無効化 |
+| `on --async` | `send_mode` を async に切替（保存） |
 | `on --local` / `off --local` | プロジェクト単位で hooks + MCP 有効化/無効化 |
 | `uninstall` | hooks/MCP/config 削除 |
 | `uninstall --local` | プロジェクト単位の hooks/MCP/config 削除 |
@@ -108,11 +110,21 @@ cli/src/
 {
   "server_url": "http://localhost:8080",
   "api_key": "agtr_xxxxxxxxxxxxxxxxxxxxxxxx",
-  "proxy_url": "http://proxy.example.com:8080"
+  "proxy_url": "http://proxy.example.com:8080",
+  "send_mode": "async"
 }
 ```
 
 **proxy_url** はオプション。設定しない場合は環境変数 `HTTPS_PROXY` / `HTTP_PROXY` にフォールバックする。
+
+**send_mode** はオプション（`"sync"` | `"async"`、未設定は `"sync"`）。
+
+| モード | 挙動 |
+|--------|------|
+| `sync`（既定） | hook が送信（HTTPS 往復）の完了を待つ。従来どおり。 |
+| `async` | hook は detached worker を spawn して即 return し、送信は背後で行う。worker は per-session ロックで同一セッションの送信を直列化する。 |
+
+`async` への切替は `init --async` / `on --async`、確認は `doctor` の `Send mode` 行で行う。手動送信（`--claude-session-id`）は常に同期。
 
 ### ローカル設定（--local オプション使用時）
 

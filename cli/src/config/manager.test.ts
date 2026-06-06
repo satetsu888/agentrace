@@ -12,6 +12,7 @@ import {
   findLocalConfigPath,
   findAndLoadLocalConfig,
   getSendMode,
+  persistSendMode,
   type AgentraceConfig,
 } from "./manager.js";
 
@@ -42,6 +43,50 @@ describe("config/manager", () => {
       expect(
         getSendMode({ ...testConfig, send_mode: "bogus" as unknown as "sync" })
       ).toBe("sync");
+    });
+  });
+
+  describe("persistSendMode (local config)", () => {
+    let tempProjectDir: string;
+
+    beforeEach(() => {
+      tempProjectDir = fs.mkdtempSync(path.join(os.tmpdir(), "agentrace-sendmode-"));
+    });
+
+    afterEach(() => {
+      if (fs.existsSync(tempProjectDir)) {
+        fs.rmSync(tempProjectDir, { recursive: true });
+      }
+    });
+
+    it("sets send_mode in an existing local config", () => {
+      saveLocalConfig(tempProjectDir, testConfig);
+
+      const result = persistSendMode("async", { cwd: tempProjectDir });
+
+      expect(result.ok).toBe(true);
+      expect(loadLocalConfig(tempProjectDir)?.send_mode).toBe("async");
+    });
+
+    it("preserves other config fields when updating send_mode", () => {
+      saveLocalConfig(tempProjectDir, testConfig);
+
+      persistSendMode("async", { cwd: tempProjectDir });
+
+      const updated = loadLocalConfig(tempProjectDir);
+      expect(updated?.server_url).toBe(testConfig.server_url);
+      expect(updated?.api_key).toBe(testConfig.api_key);
+    });
+
+    it("updates a local config found in a parent directory", () => {
+      saveLocalConfig(tempProjectDir, testConfig);
+      const subDir = path.join(tempProjectDir, "sub");
+      fs.mkdirSync(subDir);
+
+      const result = persistSendMode("async", { cwd: subDir });
+
+      expect(result.ok).toBe(true);
+      expect(loadLocalConfig(tempProjectDir)?.send_mode).toBe("async");
     });
   });
 

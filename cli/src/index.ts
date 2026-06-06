@@ -23,13 +23,15 @@ program
   .option("--dev", "Use local CLI path for development")
   .option("--local", "Install hooks/MCP for current project only (project-local scope)")
   .option("--separate-local-config", "Store config in project directory (requires --local)")
-  .action(async (options: { url: string; proxy?: string; dev?: boolean; local?: boolean; separateLocalConfig?: boolean }) => {
+  .option("--async", "Send transcripts asynchronously (off the hook critical path)")
+  .action(async (options: { url: string; proxy?: string; dev?: boolean; local?: boolean; separateLocalConfig?: boolean; async?: boolean }) => {
     await initCommand({
       url: options.url,
       proxy: options.proxy,
       dev: options.dev,
       local: options.local,
       separateLocalConfig: options.separateLocalConfig,
+      async: options.async,
     });
   });
 
@@ -65,8 +67,9 @@ program
   .description("Enable agentrace hooks (credentials preserved)")
   .option("--dev", "Use local CLI path for development")
   .option("--local", "Enable hooks/MCP for current project only")
-  .action(async (options: { dev?: boolean; local?: boolean }) => {
-    await onCommand({ dev: options.dev, local: options.local });
+  .option("--async", "Switch send mode to asynchronous")
+  .action(async (options: { dev?: boolean; local?: boolean; async?: boolean }) => {
+    await onCommand({ dev: options.dev, local: options.local, async: options.async });
   });
 
 program
