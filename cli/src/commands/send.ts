@@ -1,7 +1,8 @@
-import { execSync } from "child_process";
-import { loadConfigWithFallback } from "../config/manager.js";
+import { execSync, spawn } from "child_process";
+import { loadConfigWithFallback, getSendMode } from "../config/manager.js";
 import { getNewLines, saveCursor, hasCursor } from "../config/cursor.js";
 import { sendIngest } from "../utils/http.js";
+import { WORKER_ENV } from "../send/worker.js";
 import {
   findSessionFile,
   extractCwdFromTranscript,
@@ -234,14 +235,22 @@ export async function sendCommand(): Promise<void> {
     process.exit(0);
   }
 
+  // Use CLAUDE_PROJECT_DIR (stable project root) instead of cwd (can change during builds)
+  const projectDir = process.env.CLAUDE_PROJECT_DIR || data.cwd;
+
+  // Async mode: hand off to a detached worker and return immediately, keeping
+  // the HTTPS send off the hook's critical path. The 10s UserPromptSubmit wait
+  // is sync-only.
+  if (getSendMode(loadConfigWithFallback(projectDir)) === "async") {
+    spawnWorker({ sessionId, transcriptPath, projectDir });
+    process.exit(0);
+  }
+
   // For UserPromptSubmit, wait for transcript to be written
   // (Claude hasn't started processing yet, so transcript may not be updated)
   if (data.hook_event_name === "UserPromptSubmit") {
     await sleep(10000);
   }
-
-  // Use CLAUDE_PROJECT_DIR (stable project root) instead of cwd (can change during builds)
-  const projectDir = process.env.CLAUDE_PROJECT_DIR || data.cwd;
 
   await sendTranscript({
     sessionId,
@@ -249,6 +258,28 @@ export async function sendCommand(): Promise<void> {
     cwd: projectDir,
     isHook: true,
   });
+}
+
+function spawnWorker(payload: {
+  sessionId: string;
+  transcriptPath: string;
+  projectDir?: string;
+}): void {
+  const child = spawn(
+    process.execPath,
+    [...process.execArgv, process.argv[1], "__send-worker"],
+    {
+      detached: true,
+      stdio: "ignore",
+      env: {
+        ...process.env,
+        [WORKER_ENV.sessionId]: payload.sessionId,
+        [WORKER_ENV.transcriptPath]: payload.transcriptPath,
+        [WORKER_ENV.projectDir]: payload.projectDir ?? "",
+      },
+    }
+  );
+  child.unref();
 }
 
 /**

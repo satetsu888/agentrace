@@ -9,6 +9,7 @@ import { onCommand } from "./commands/on.js";
 import { offCommand } from "./commands/off.js";
 import { mcpServerCommand } from "./commands/mcp-server.js";
 import { doctorCommand } from "./commands/doctor.js";
+import { workerMain } from "./send/worker.js";
 
 const program = new Command();
 
@@ -88,6 +89,13 @@ program
   .description("Check configuration and server connectivity")
   .action(async () => {
     await doctorCommand();
+  });
+
+program
+  .command("__send-worker", { hidden: true })
+  .action(async () => {
+    await workerMain();
+    process.exit(0);
   });
 
 program.parse();
