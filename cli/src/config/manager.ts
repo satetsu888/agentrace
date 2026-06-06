@@ -2,10 +2,22 @@ import * as fs from "node:fs";
 import * as path from "node:path";
 import * as os from "node:os";
 
+export type SendMode = "sync" | "async";
+
 export interface AgentraceConfig {
   server_url: string;
   api_key: string;
   proxy_url?: string;
+  send_mode?: SendMode;
+}
+
+/**
+ * Resolve the effective send mode from a config.
+ * Defaults to "sync" when unset, null, or set to any unrecognized value
+ * (opt-in / backward-compatible default — HC-1).
+ */
+export function getSendMode(config: AgentraceConfig | null | undefined): SendMode {
+  return config?.send_mode === "async" ? "async" : "sync";
 }
 
 const CONFIG_DIR = path.join(os.homedir(), ".agentrace");

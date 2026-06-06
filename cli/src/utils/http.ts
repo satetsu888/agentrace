@@ -21,6 +21,19 @@ export interface IngestResponse {
   error?: string;
 }
 
+/**
+ * Default send timeout for ingest requests (~30s, tunable).
+ * Bounds how long a worker can hold a per-session lock while a send hangs,
+ * which is a precondition for self-recovering liveness (HC-6).
+ * Must stay below MAX_LOCK_MS in send/lock.ts.
+ */
+export const SEND_TIMEOUT_MS = 30_000;
+
+function getSendTimeoutMs(): number {
+  const override = Number(process.env.AGENTRACE_SEND_TIMEOUT_MS);
+  return Number.isFinite(override) && override > 0 ? override : SEND_TIMEOUT_MS;
+}
+
 export interface WebSessionResponse {
   url: string;
   expires_at: string;
@@ -50,6 +63,9 @@ export async function sendIngest(
       },
       body: JSON.stringify(payload),
       dispatcher: createDispatcher(projectDir),
+      // Bound the request so a hung send cannot hold a session lock forever.
+      // Timeout/abort throws and is normalized to { ok: false } by the catch below.
+      signal: AbortSignal.timeout(getSendTimeoutMs()),
     });
 
     if (!response.ok) {

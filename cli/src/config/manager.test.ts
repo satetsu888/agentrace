@@ -11,6 +11,7 @@ import {
   loadConfigWithFallback,
   findLocalConfigPath,
   findAndLoadLocalConfig,
+  getSendMode,
   type AgentraceConfig,
 } from "./manager.js";
 
@@ -19,6 +20,30 @@ describe("config/manager", () => {
     server_url: "http://localhost:8080",
     api_key: "agtr_test_key",
   };
+
+  describe("getSendMode", () => {
+    it("returns 'sync' when config is null", () => {
+      expect(getSendMode(null)).toBe("sync");
+    });
+
+    it("returns 'sync' when send_mode is not set", () => {
+      expect(getSendMode(testConfig)).toBe("sync");
+    });
+
+    it("returns 'async' when send_mode is 'async'", () => {
+      expect(getSendMode({ ...testConfig, send_mode: "async" })).toBe("async");
+    });
+
+    it("returns 'sync' when send_mode is 'sync'", () => {
+      expect(getSendMode({ ...testConfig, send_mode: "sync" })).toBe("sync");
+    });
+
+    it("falls back to 'sync' for an unrecognized send_mode value", () => {
+      expect(
+        getSendMode({ ...testConfig, send_mode: "bogus" as unknown as "sync" })
+      ).toBe("sync");
+    });
+  });
 
   describe("global config", () => {
     it("getConfigPath returns expected path", () => {
