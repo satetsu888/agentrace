@@ -239,9 +239,11 @@ export async function sendCommand(): Promise<void> {
   const projectDir = process.env.CLAUDE_PROJECT_DIR || data.cwd;
 
   // Async mode: hand off to a detached worker and return immediately, keeping
-  // the HTTPS send off the hook's critical path. The 10s UserPromptSubmit wait
-  // is sync-only. If the worker cannot be spawned, fall back to a sync send so
-  // the hook neither crashes nor drops the batch.
+  // the HTTPS send off the hook's critical path (the 10s UserPromptSubmit wait
+  // is sync-only). spawn() reports launch failures asynchronously, not as a
+  // throw, so the catch below only covers a synchronous spawn() error; a worker
+  // that fails to launch is harmless because the cursor only advances on HTTP
+  // 200, so the batch is retried on the next fire.
   if (getSendMode(loadConfigWithFallback(projectDir)) === "async") {
     try {
       spawnWorker({ sessionId, transcriptPath, projectDir });
