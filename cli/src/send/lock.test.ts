@@ -3,7 +3,7 @@ import * as fs from "node:fs";
 import * as path from "node:path";
 import * as os from "node:os";
 import { spawn } from "node:child_process";
-import { fileURLToPath } from "node:url";
+import { fileURLToPath, pathToFileURL } from "node:url";
 import {
   acquireHolder,
   acquireSessionLock,
@@ -236,7 +236,10 @@ describe("send/lock", () => {
       writeMeta(holderDir(SID), { pid: DEAD_PID, startedAt: Date.now() });
 
       const here = path.dirname(fileURLToPath(import.meta.url));
-      const racerPath = path.join(here, "__lock_racer__.ts");
+      // Import lock.ts by absolute file URL so the racer can live under tmpHome
+      // (cleaned in afterEach) instead of being written into cli/src/send.
+      const lockUrl = pathToFileURL(path.join(here, "lock.ts")).href;
+      const racerPath = path.join(tmpHome, "__lock_racer__.ts");
       const sentinel = path.join(tmpHome, "release-racers");
       // Each racer reports its result, then stays alive until the sentinel file
       // appears. The test writes the sentinel only after all racers have reported,
@@ -246,7 +249,7 @@ describe("send/lock", () => {
       // process scheduling.
       fs.writeFileSync(
         racerPath,
-        `import { acquireHolder } from "./lock.js";\n` +
+        `import { acquireHolder } from ${JSON.stringify(lockUrl)};\n` +
           `import * as fs from "node:fs";\n` +
           `const got = acquireHolder(process.env.SID!);\n` +
           `process.stdout.write(got ? "ACQUIRED" : "NOPE");\n` +
