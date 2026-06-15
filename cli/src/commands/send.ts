@@ -38,16 +38,22 @@ export type SendOutcome =
 // Event types that should not be sent to the server (high-volume, not needed for display)
 const SKIPPED_EVENT_TYPES = ["progress", "file-history-snapshot"];
 
+// Cap git lookups so a hung git (e.g. a stuck .git/index.lock) cannot block the
+// send. In async mode this also keeps the session lock from being held past its
+// stale timeout, which would let a later fire take over as a second holder.
+const GIT_EXEC_TIMEOUT_MS = 5_000;
+
 function getGitRemoteUrl(cwd: string): string | null {
   try {
     const url = execSync("git remote get-url origin", {
       cwd,
       encoding: "utf-8",
       stdio: ["pipe", "pipe", "pipe"],
+      timeout: GIT_EXEC_TIMEOUT_MS,
     }).trim();
     return url || null;
   } catch {
-    return null; // Not a git repo or no remote
+    return null; // Not a git repo, no remote, or git timed out
   }
 }
 
@@ -57,6 +63,7 @@ function getGitBranch(cwd: string): string | null {
       cwd,
       encoding: "utf-8",
       stdio: ["pipe", "pipe", "pipe"],
+      timeout: GIT_EXEC_TIMEOUT_MS,
     }).trim();
     return branch || null;
   } catch {
