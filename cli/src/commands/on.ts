@@ -1,7 +1,7 @@
 import * as path from "node:path";
 import { fileURLToPath } from "node:url";
 import { installHooks, installMcpServer, installPreToolUseHook } from "../hooks/installer.js";
-import { loadConfigWithFallback } from "../config/manager.js";
+import { loadConfigWithFallback, persistSendMode } from "../config/manager.js";
 
 const __filename = fileURLToPath(import.meta.url);
 const __dirname = path.dirname(__filename);
@@ -9,6 +9,7 @@ const __dirname = path.dirname(__filename);
 export interface OnOptions {
   dev?: boolean;
   local?: boolean;
+  async?: boolean;
 }
 
 export async function onCommand(options: OnOptions = {}): Promise<void> {
@@ -23,6 +24,15 @@ export async function onCommand(options: OnOptions = {}): Promise<void> {
 
   if (options.local) {
     console.log("[Local Mode] Enabling hooks/MCP for this project only\n");
+  }
+
+  if (options.async) {
+    const result = persistSendMode("async", { cwd: process.cwd() });
+    if (result.ok) {
+      console.log(`✓ Send mode set to async (${result.path})`);
+    } else {
+      console.error("✗ Failed to update send_mode: config not found");
+    }
   }
 
   // Determine hook command

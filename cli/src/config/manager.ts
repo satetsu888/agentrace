@@ -2,10 +2,41 @@ import * as fs from "node:fs";
 import * as path from "node:path";
 import * as os from "node:os";
 
+export type SendMode = "sync" | "async";
+
 export interface AgentraceConfig {
   server_url: string;
   api_key: string;
   proxy_url?: string;
+  send_mode?: SendMode;
+}
+
+export function getSendMode(config: AgentraceConfig | null | undefined): SendMode {
+  return config?.send_mode === "async" ? "async" : "sync";
+}
+
+/**
+ * Write send_mode into the effective config file — the local config found in the
+ * tree (which takes precedence when sending), otherwise the global config. This
+ * targets the same file that loadConfigWithFallback reads. Returns the updated path.
+ */
+export function persistSendMode(
+  mode: SendMode,
+  opts: { cwd: string }
+): { ok: boolean; path?: string } {
+  const found = findAndLoadLocalConfig(opts.cwd);
+  if (found) {
+    const projectDir = path.dirname(path.dirname(found.path));
+    saveLocalConfig(projectDir, { ...found.config, send_mode: mode });
+    return { ok: true, path: found.path };
+  }
+
+  const global = loadConfig();
+  if (!global) {
+    return { ok: false };
+  }
+  saveConfig({ ...global, send_mode: mode });
+  return { ok: true, path: getConfigPath() };
 }
 
 const CONFIG_DIR = path.join(os.homedir(), ".agentrace");

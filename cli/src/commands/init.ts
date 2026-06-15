@@ -21,6 +21,7 @@ export interface InitOptions {
   dev?: boolean;
   local?: boolean;
   separateLocalConfig?: boolean;
+  async?: boolean;
 }
 
 export async function initCommand(options: InitOptions = {}): Promise<void> {
@@ -110,6 +111,7 @@ export async function initCommand(options: InitOptions = {}): Promise<void> {
       server_url: serverUrlStr,
       api_key: result.apiKey,
       ...(options.proxy && { proxy_url: options.proxy }),
+      ...(options.async && { send_mode: "async" as const }),
     };
 
     if (options.local && options.separateLocalConfig && projectDir) {
@@ -124,6 +126,9 @@ export async function initCommand(options: InitOptions = {}): Promise<void> {
     }
     if (options.proxy) {
       console.log(`  Proxy: ${options.proxy}`);
+    }
+    if (options.async) {
+      console.log(`  Send mode: async`);
     }
 
     // Determine hook command

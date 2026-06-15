@@ -1,7 +1,8 @@
-import { execSync } from "child_process";
-import { loadConfigWithFallback } from "../config/manager.js";
+import { execSync, spawn } from "child_process";
+import { loadConfigWithFallback, getSendMode } from "../config/manager.js";
 import { getNewLines, saveCursor, hasCursor } from "../config/cursor.js";
 import { sendIngest } from "../utils/http.js";
+import { WORKER_ENV } from "../send/worker.js";
 import {
   findSessionFile,
   extractCwdFromTranscript,
@@ -21,8 +22,26 @@ interface SendTranscriptParams {
   isHook: boolean;
 }
 
+export interface RunSendParams {
+  sessionId: string;
+  transcriptPath: string;
+  cwd?: string;
+}
+
+export type SendOutcome =
+  | { status: "no-config" }
+  | { status: "no-lines" }
+  | { status: "no-valid-lines" }
+  | { status: "sent"; lineCount: number }
+  | { status: "error"; error: string };
+
 // Event types that should not be sent to the server (high-volume, not needed for display)
 const SKIPPED_EVENT_TYPES = ["progress", "file-history-snapshot"];
+
+// Cap git lookups so a hung git (e.g. a stuck .git/index.lock) cannot block the
+// send. In async mode this also keeps the session lock from being held past its
+// stale timeout, which would let a later fire take over as a second holder.
+const GIT_EXEC_TIMEOUT_MS = 5_000;
 
 function getGitRemoteUrl(cwd: string): string | null {
   try {
@@ -30,10 +49,11 @@ function getGitRemoteUrl(cwd: string): string | null {
       cwd,
       encoding: "utf-8",
       stdio: ["pipe", "pipe", "pipe"],
+      timeout: GIT_EXEC_TIMEOUT_MS,
     }).trim();
     return url || null;
   } catch {
-    return null; // Not a git repo or no remote
+    return null; // Not a git repo, no remote, or git timed out
   }
 }
 
@@ -43,6 +63,7 @@ function getGitBranch(cwd: string): string | null {
       cwd,
       encoding: "utf-8",
       stdio: ["pipe", "pipe", "pipe"],
+      timeout: GIT_EXEC_TIMEOUT_MS,
     }).trim();
     return branch || null;
   } catch {
@@ -51,34 +72,21 @@ function getGitBranch(cwd: string): string | null {
 }
 
 /**
- * Core logic for sending transcript data to the server.
- * Shared between hook-based and manual invocations.
+ * Send the cursor diff to the server and advance the cursor on success.
+ * Returns an outcome instead of exiting so callers control reporting and,
+ * for the async worker, lock release.
  */
-async function sendTranscript(params: SendTranscriptParams): Promise<void> {
-  const { sessionId, transcriptPath, cwd, isHook } = params;
+export async function runSend(params: RunSendParams): Promise<SendOutcome> {
+  const { sessionId, transcriptPath, cwd } = params;
 
-  const exitWithError = (message: string) => {
-    console.error(message);
-    process.exit(isHook ? 0 : 1);
-  };
-
-  // Check if config exists (local config takes precedence over global)
   const config = loadConfigWithFallback(cwd);
   if (!config) {
-    exitWithError(
-      "[agentrace] Warning: Config not found. Run 'npx agentrace init' first."
-    );
-    return;
+    return { status: "no-config" };
   }
 
-  // Get new lines from transcript
   const { lines, totalLineCount } = getNewLines(transcriptPath, sessionId);
-
   if (lines.length === 0) {
-    if (!isHook) {
-      console.log("[agentrace] No new lines to send.");
-    }
-    process.exit(0);
+    return { status: "no-lines" };
   }
 
   // Parse JSONL lines and filter out skipped event types
@@ -86,7 +94,6 @@ async function sendTranscript(params: SendTranscriptParams): Promise<void> {
   for (const line of lines) {
     try {
       const parsed = JSON.parse(line) as Record<string, unknown>;
-      // Skip high-volume event types that are not needed for display
       if (typeof parsed.type === "string" && SKIPPED_EVENT_TYPES.includes(parsed.type)) {
         continue;
       }
@@ -97,10 +104,7 @@ async function sendTranscript(params: SendTranscriptParams): Promise<void> {
   }
 
   if (transcriptLines.length === 0) {
-    if (!isHook) {
-      console.log("[agentrace] No valid transcript lines to send.");
-    }
-    process.exit(0);
+    return { status: "no-valid-lines" };
   }
 
   // Detect subagent (Task tool) sessions from first transcript line
@@ -135,7 +139,6 @@ async function sendTranscript(params: SendTranscriptParams): Promise<void> {
     gitBranch = getGitBranch(cwd) ?? undefined;
   }
 
-  // Send to server
   const result = await sendIngest(
     {
       session_id: sessionId,
@@ -143,7 +146,6 @@ async function sendTranscript(params: SendTranscriptParams): Promise<void> {
       cwd: cwd,
       git_remote_url: gitRemoteUrl,
       git_branch: gitBranch,
-      // Subagent fields
       parent_session_id: parentSessionId,
       agent_id: agentId,
       is_sidechain: isSidechain || undefined,
@@ -152,20 +154,56 @@ async function sendTranscript(params: SendTranscriptParams): Promise<void> {
     cwd
   );
 
-  if (result.ok) {
-    // Update cursor on success
-    saveCursor(sessionId, totalLineCount);
-    if (!isHook) {
-      console.log(
-        `[agentrace] Sent ${transcriptLines.length} lines for session ${sessionId}`
-      );
-    }
-  } else {
-    exitWithError(`[agentrace] Warning: ${result.error}`);
-    return;
+  if (!result.ok) {
+    return { status: "error", error: result.error ?? "unknown error" };
   }
 
-  process.exit(0);
+  // Update cursor only on success so a failed send is retried by the next fire.
+  saveCursor(sessionId, totalLineCount);
+  return { status: "sent", lineCount: transcriptLines.length };
+}
+
+/**
+ * Send wrapper for the synchronous hook path and manual invocation.
+ * Maps the outcome to logging and the existing exit-code contract
+ * (hook: always exit 0; manual: exit 1 on error).
+ */
+async function sendTranscript(params: SendTranscriptParams): Promise<void> {
+  const { sessionId, transcriptPath, cwd, isHook } = params;
+
+  const outcome = await runSend({ sessionId, transcriptPath, cwd });
+
+  let exitCode = 0;
+  switch (outcome.status) {
+    case "no-config":
+      console.error(
+        "[agentrace] Warning: Config not found. Run 'npx agentrace init' first."
+      );
+      exitCode = isHook ? 0 : 1;
+      break;
+    case "no-lines":
+      if (!isHook) {
+        console.log("[agentrace] No new lines to send.");
+      }
+      break;
+    case "no-valid-lines":
+      if (!isHook) {
+        console.log("[agentrace] No valid transcript lines to send.");
+      }
+      break;
+    case "sent":
+      if (!isHook) {
+        console.log(
+          `[agentrace] Sent ${outcome.lineCount} lines for session ${sessionId}`
+        );
+      }
+      break;
+    case "error":
+      console.error(`[agentrace] Warning: ${outcome.error}`);
+      exitCode = isHook ? 0 : 1;
+      break;
+  }
+  process.exit(exitCode);
 }
 
 /**
@@ -204,14 +242,29 @@ export async function sendCommand(): Promise<void> {
     process.exit(0);
   }
 
+  // Use CLAUDE_PROJECT_DIR (stable project root) instead of cwd (can change during builds)
+  const projectDir = process.env.CLAUDE_PROJECT_DIR || data.cwd;
+
+  // Async mode: hand off to a detached worker and return immediately, keeping
+  // the HTTPS send off the hook's critical path (the 10s UserPromptSubmit wait
+  // is sync-only). spawn() reports launch failures asynchronously, not as a
+  // throw, so the catch below only covers a synchronous spawn() error; a worker
+  // that fails to launch is harmless because the cursor only advances on HTTP
+  // 200, so the batch is retried on the next fire.
+  if (getSendMode(loadConfigWithFallback(projectDir)) === "async") {
+    try {
+      spawnWorker({ sessionId, transcriptPath, projectDir });
+      process.exit(0);
+    } catch {
+      // fall through to the synchronous send below
+    }
+  }
+
   // For UserPromptSubmit, wait for transcript to be written
   // (Claude hasn't started processing yet, so transcript may not be updated)
   if (data.hook_event_name === "UserPromptSubmit") {
     await sleep(10000);
   }
-
-  // Use CLAUDE_PROJECT_DIR (stable project root) instead of cwd (can change during builds)
-  const projectDir = process.env.CLAUDE_PROJECT_DIR || data.cwd;
 
   await sendTranscript({
     sessionId,
@@ -219,6 +272,29 @@ export async function sendCommand(): Promise<void> {
     cwd: projectDir,
     isHook: true,
   });
+}
+
+function spawnWorker(payload: {
+  sessionId: string;
+  transcriptPath: string;
+  projectDir?: string;
+}): void {
+  const child = spawn(
+    process.execPath,
+    [...process.execArgv, process.argv[1], "__send-worker"],
+    {
+      detached: true,
+      stdio: "ignore",
+      env: {
+        ...process.env,
+        [WORKER_ENV.sessionId]: payload.sessionId,
+        [WORKER_ENV.transcriptPath]: payload.transcriptPath,
+        [WORKER_ENV.projectDir]: payload.projectDir ?? "",
+      },
+    }
+  );
+  child.on("error", () => {});
+  child.unref();
 }
 
 /**

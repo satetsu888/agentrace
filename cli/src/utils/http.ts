@@ -21,6 +21,13 @@ export interface IngestResponse {
   error?: string;
 }
 
+export const SEND_TIMEOUT_MS = 30_000;
+
+function getSendTimeoutMs(): number {
+  const override = Number(process.env.AGENTRACE_SEND_TIMEOUT_MS);
+  return Number.isFinite(override) && override > 0 ? override : SEND_TIMEOUT_MS;
+}
+
 export interface WebSessionResponse {
   url: string;
   expires_at: string;
@@ -50,6 +57,7 @@ export async function sendIngest(
       },
       body: JSON.stringify(payload),
       dispatcher: createDispatcher(projectDir),
+      signal: AbortSignal.timeout(getSendTimeoutMs()),
     });
 
     if (!response.ok) {

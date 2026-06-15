@@ -3,6 +3,7 @@ import {
   loadConfigWithFallback,
   getConfigPath,
   findAndLoadLocalConfig,
+  getSendMode,
 } from "../config/manager.js";
 import { createDispatcher } from "../utils/proxy.js";
 import { fetch } from "undici";
@@ -48,6 +49,7 @@ export async function doctorCommand(): Promise<void> {
     console.log(`  Active config: ${configSource} (${configPath})`);
     console.log(`  Server URL: ${effectiveConfig.server_url}`);
     console.log(`  API Key: ${maskApiKey(effectiveConfig.api_key)}`);
+    console.log(`  Send mode: ${getSendMode(effectiveConfig)}`);
     if (effectiveConfig.proxy_url) {
       console.log(`  Proxy URL: ${effectiveConfig.proxy_url}`);
     }
